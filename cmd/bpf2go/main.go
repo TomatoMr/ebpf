@@ -69,7 +69,7 @@ func run(stdout io.Writer, pkg, outputDir string, args []string) (err error) {
 		pkg:       pkg,
 		outputDir: outputDir,
 	}
-
+	var objFile string
 	fs := flag.NewFlagSet("bpf2go", flag.ContinueOnError)
 	fs.StringVar(&b2g.cc, "cc", "clang", "`binary` used to compile C to BPF")
 	fs.StringVar(&b2g.strip, "strip", "", "`binary` used to strip DWARF from compiled BPF (default \"llvm-strip\")")
@@ -78,6 +78,7 @@ func run(stdout io.Writer, pkg, outputDir string, args []string) (err error) {
 	fs.StringVar(&b2g.tags, "tags", "", "list of Go build tags to include in generated files")
 	flagTarget := fs.String("target", "bpfel,bpfeb", "clang target to compile for")
 	fs.StringVar(&b2g.makeBase, "makebase", "", "write make compatible depinfo files relative to `directory`")
+	fs.StringVar(&objFile, "objfile", "", "choose your own obj file and not to compile c files")
 
 	fs.SetOutput(stdout)
 	fs.Usage = func() {
@@ -185,8 +186,40 @@ func run(stdout io.Writer, pkg, outputDir string, args []string) (err error) {
 	}
 
 	for target, arches := range targets {
-		if err := b2g.convert(target, arches); err != nil {
-			return err
+		if len(objFile) > 0 {
+			var tags []string
+			tags = append(tags, strings.Join(arches, " "))
+			stem := fmt.Sprintf("%s_%s", strings.ToLower(b2g.ident), target.clang)
+			if target.linux != "" {
+				stem = fmt.Sprintf("%s_%s_%s", strings.ToLower(b2g.ident), target.clang, target.linux)
+			}
+			goFileName := filepath.Join(b2g.outputDir, stem+".go")
+			goFile, err := os.Create(goFileName)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err != nil {
+					os.Remove(goFile.Name())
+					goFile.Close()
+				}
+			}()
+			objFileName := filepath.Join(b2g.outputDir, stem+".o")
+			err = writeCommon(writeArgs{
+				pkg:   b2g.pkg,
+				ident: b2g.ident,
+				tags:  tags,
+				obj:   objFileName,
+				out:   goFile,
+			})
+			if err != nil {
+				return fmt.Errorf("can't write %s: %s", goFileName, err)
+			}
+			return nil
+		} else {
+			if err := b2g.convert(target, arches); err != nil {
+				return err
+			}
 		}
 	}
 
